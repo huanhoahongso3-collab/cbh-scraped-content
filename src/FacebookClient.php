@@ -32,6 +32,10 @@ class FacebookClient
      */
     public function feedPage(?string $cursor, ?int $beforeTime): array
     {
+        if ($this->lsd === null) {
+            $this->bootstrap();
+        }
+
         $variables = [
             'afterTime' => null,
             'beforeTime' => $beforeTime,
@@ -162,7 +166,7 @@ class FacebookClient
             $ok = curl_exec($ch);
             $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error = curl_error($ch);
-            curl_close($ch);
+            @curl_close($ch);
             fclose($fp);
 
             if (!$ok || $status !== 200 || filesize($path . '.part') === 0) {
@@ -227,6 +231,18 @@ class FacebookClient
             throw new RuntimeException('Không lấy được token LSD (có thể Facebook đang chặn IP này)');
         }
         $this->lsd = $m[1];
+
+        // Nếu target không phải là ID số (vanity username), trích xuất ID số từ HTML trang cá nhân
+        if (!ctype_digit((string) $this->config['page_id'])) {
+            if (preg_match('/"userID":"(\d+)"/', $html, $idMatch) ||
+                preg_match('/"profile_id":(\d+)/', $html, $idMatch) ||
+                preg_match('/fb:\/\/profile\/(\d+)/', $html, $idMatch) ||
+                preg_match('/"entity_id":"(\d+)"/', $html, $idMatch) ||
+                preg_match('/"identifier":(\d+)/', $html, $idMatch) ||
+                preg_match('/"delegate_page":\{"id":"(\d+)"/', $html, $idMatch)) {
+                $this->config['page_id'] = $idMatch[1];
+            }
+        }
     }
 
     private function get(string $url): string
@@ -276,7 +292,7 @@ class FacebookClient
         $body = curl_exec($ch);
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
-        curl_close($ch);
+        @curl_close($ch);
         $this->lastRequestAt = microtime(true);
 
         if ($body === false || $status !== 200) {

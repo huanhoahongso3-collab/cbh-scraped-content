@@ -92,19 +92,19 @@ class PostParser
     public static function media(array $media, ?string $url): array
     {
         $isVideo = ($media['__typename'] ?? '') === 'Video';
-        // Chỉ viewer_image là ảnh gốc; photo_image/image là bản thu nhỏ để hiển thị trên feed
-        $full = $media['viewer_image']['uri'] ?? null;
+        // viewer_image trước đây có uri gốc; hiện tại uri nằm ở photo_image/image/placeholder_image
+        $full = $media['viewer_image']['uri'] ?? $media['photo_image']['uri'] ?? $media['image']['uri'] ?? $media['placeholder_image']['uri'] ?? self::find($media, 'uri');
 
         return [
             'id' => $media['id'],
             'type' => $isVideo ? 'video' : 'photo',
             'url' => $url,
             'source_url' => $isVideo ? self::bestVideoUrl($media) : $full,
-            'width' => $media['viewer_image']['width'] ?? $media['width'] ?? null,
-            'height' => $media['viewer_image']['height'] ?? $media['height'] ?? null,
+            'width' => $media['viewer_image']['width'] ?? $media['photo_image']['width'] ?? $media['width'] ?? null,
+            'height' => $media['viewer_image']['height'] ?? $media['photo_image']['height'] ?? $media['height'] ?? null,
             'alt' => $media['accessibility_caption'] ?? null,
             'thumbnail_url' => self::find($media, 'preferred_thumbnail')['image']['uri']
-                ?? $media['thumbnailImage']['uri'] ?? $media['photo_image']['uri'] ?? $media['image']['uri'] ?? null,
+                ?? $media['thumbnailImage']['uri'] ?? $media['photo_image']['uri'] ?? $media['image']['uri'] ?? $full,
             'file' => null,
         ];
     }

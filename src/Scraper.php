@@ -8,8 +8,8 @@ class Scraper
 {
     // Ở chế độ cập nhật, gặp liên tiếp từng này bài đã có thì coi như đã bắt kịp
     private const KNOWN_STREAK_LIMIT = 6;
-    // Số bài liên tiếp cũ hơn mốc --since để dừng phân trang
-    private const OLD_STREAK_LIMIT = 5;
+    // Số bài liên tiếp cũ hơn mốc --since để dừng phân trang (cho phép vượt qua bài ghim cũ hoặc lệch thứ tự)
+    private const OLD_STREAK_LIMIT = 20;
 
     private string $postsDir;
     private string $stateFile;
@@ -58,7 +58,7 @@ class Scraper
                 }
 
                 // Kiểm tra mốc thời gian --since nếu có
-                $postTime = $story['creation_time'] ?? null;
+                $postTime = $story['creation_time'] ?? PostParser::find($story, 'creation_time');
                 if ($this->sinceTimestamp !== null && $postTime !== null && $postTime < $this->sinceTimestamp) {
                     $oldStreak++;
                     if ($oldStreak >= self::OLD_STREAK_LIMIT) {
@@ -84,8 +84,9 @@ class Scraper
             }
             $this->writeIndex();
 
+            $prevCursor = $cursor;
             $cursor = $page['cursor'];
-            $reachedEnd = !$page['has_next'] || $cursor === null;
+            $reachedEnd = empty($cursor) || ($cursor === $prevCursor) || (!$page['has_next'] && empty($page['stories']));
             if ($update && $knownStreak >= self::KNOWN_STREAK_LIMIT) {
                 $this->log('Đã bắt kịp các bài đã lưu.');
                 break;
