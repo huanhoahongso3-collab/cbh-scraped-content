@@ -144,13 +144,21 @@ class FacebookClient
         $this->retry(function () use ($url, $path) {
             $fp = fopen($path . '.part', 'w');
             $ch = curl_init($url);
-            curl_setopt_array($ch, [
+            $dlOptions = [
                 CURLOPT_FILE => $fp,
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_CONNECTTIMEOUT => 20,
                 CURLOPT_TIMEOUT => 900,
                 CURLOPT_USERAGENT => $this->config['user_agent'],
-            ]);
+            ];
+            $proxy = getenv('ALL_PROXY') ?: getenv('HTTPS_PROXY') ?: getenv('HTTP_PROXY') ?: ($this->config['proxy'] ?? null);
+            if ($proxy) {
+                $dlOptions[CURLOPT_PROXY] = $proxy;
+                if (str_starts_with($proxy, 'socks5')) {
+                    $dlOptions[CURLOPT_PROXYTYPE] = CURLPROXY_SOCKS5_HOSTNAME;
+                }
+            }
+            curl_setopt_array($ch, $dlOptions);
             $ok = curl_exec($ch);
             $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error = curl_error($ch);
@@ -241,7 +249,7 @@ class FacebookClient
         }
 
         $ch = curl_init($url);
-        curl_setopt_array($ch, [
+        $options = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_ENCODING => '',
@@ -253,7 +261,15 @@ class FacebookClient
                 'User-Agent: ' . $this->config['user_agent'],
                 'Accept-Language: en-US,en;q=0.9',
             ], $headers),
-        ]);
+        ];
+        $proxy = getenv('ALL_PROXY') ?: getenv('HTTPS_PROXY') ?: getenv('HTTP_PROXY') ?: ($this->config['proxy'] ?? null);
+        if ($proxy) {
+            $options[CURLOPT_PROXY] = $proxy;
+            if (str_starts_with($proxy, 'socks5')) {
+                $options[CURLOPT_PROXYTYPE] = CURLPROXY_SOCKS5_HOSTNAME;
+            }
+        }
+        curl_setopt_array($ch, $options);
         if ($post !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post));
         }
