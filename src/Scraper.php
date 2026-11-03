@@ -8,6 +8,8 @@ class Scraper
 {
     // Ở chế độ cập nhật, gặp liên tiếp từng này bài đã có thì coi như đã bắt kịp
     private const KNOWN_STREAK_LIMIT = 6;
+    // Số bài liên tiếp cũ hơn mốc --since để dừng phân trang
+    private const OLD_STREAK_LIMIT = 5;
 
     private string $postsDir;
     private string $stateFile;
@@ -19,6 +21,7 @@ class Scraper
         private PostParser $parser,
         private string $dataDir,
         private bool $withMedia = true,
+        private ?int $sinceTimestamp = null,
     ) {
         $this->postsDir = "{$dataDir}/posts";
         $this->stateFile = "{$dataDir}/state.json";
@@ -46,12 +49,27 @@ class Scraper
         $cursor = null;
         $handled = 0;
         $knownStreak = 0;
+        $oldStreak = 0;
         do {
             $page = $this->client->feedPage($cursor, $beforeTime);
             foreach ($page['stories'] as $story) {
                 if (empty($story['post_id'])) {
                     continue;
                 }
+
+                // Kiểm tra mốc thời gian --since nếu có
+                $postTime = $story['creation_time'] ?? null;
+                if ($this->sinceTimestamp !== null && $postTime !== null && $postTime < $this->sinceTimestamp) {
+                    $oldStreak++;
+                    if ($oldStreak >= self::OLD_STREAK_LIMIT) {
+                        $this->log('Đã chạm mốc thời gian --since (' . date('Y-m-d', $this->sinceTimestamp) . '). Dừng quét.');
+                        break 2;
+                    }
+                    continue;
+                } else {
+                    $oldStreak = 0;
+                }
+
                 $known = $this->posts[$story['post_id']] ?? null;
                 if ($known && ($known['media_complete'] || !$this->withMedia)) {
                     $knownStreak++;
@@ -108,98 +126,110 @@ class Scraper
      */
     private function fetchMedia(array &$post, string $mediaDir): bool
     {
-        $complete = true;
-        try {
-            $this->walkAlbum($post);
-        } catch (RuntimeException $e) {
-            $this->log("  ! Không lấy đủ album: {$e->getMessage()}");
-            $complete = false;
+        $items = $post['media'];
+        if (!$items) {
+            return true;
         }
 
-        foreach ($post['media'] as $i => &$media) {
-            try {
-                if ($media['source_url'] === null) {
-                    $media['source_url'] = $media['type'] === 'video'
-                        ? $this->client->videoSource($media['id'])
-                        : $this->client->photoPage($media['id'], $post['post_id'])['uri'];
-                }
-                if ($media['source_url'] === null) {
-                    throw new RuntimeException('không tìm thấy link tải');
-                }
+        $albumComplete = false;
+        if (count($items) >= 5 && $items[0]['type'] === 'photo') {
+            $items = $this->walkAlbum($items, $post['post_id']);
+            $albumComplete = true;
+        }
 
-                $extension = pathinfo(parse_url($media['source_url'], PHP_URL_PATH), PATHINFO_EXTENSION)
-                    ?: ($media['type'] === 'video' ? 'mp4' : 'jpg');
-                $name = sprintf('%02d_%s.%s', $i + 1, $media['id'], $extension);
-                if (!is_file("{$mediaDir}/{$name}")) {
-                    $this->client->download($media['source_url'], "{$mediaDir}/{$name}");
-                }
-                $media['file'] = "media/{$name}";
+        $allOk = true;
+        foreach ($items as $i => &$item) {
+            $num = str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT);
+            $ext = $item['type'] === 'video' ? 'mp4' : 'jpg';
+            $file = "{$num}_{$item['id']}.{$ext}";
+            $path = "{$mediaDir}/{$file}";
+
+            if (is_file($path) && filesize($path) > 0) {
+                $item['file'] = "media/{$file}";
+                continue;
+            }
+
+            $url = $item['type'] === 'video'
+                ? $this->client->videoSource($item['id'])
+                : $item['source_url'];
+
+            if (!$url) {
+                $allOk = false;
+                continue;
+            }
+
+            try {
+                $this->client->download($url, $path);
+                $item['file'] = "media/{$file}";
             } catch (RuntimeException $e) {
-                $this->log("  ! Media {$media['id']}: {$e->getMessage()}");
-                $complete = false;
+                $this->log("  Lỗi tải media {$item['id']}: {$e->getMessage()}");
+                $allOk = false;
             }
         }
-        unset($media);
+        unset($item);
 
-        return $complete;
+        $post['media'] = $items;
+        $post['media_count'] = count($items);
+
+        return $allOk && ($albumComplete || count($items) < 5);
     }
 
-    private function walkAlbum(array &$post): void
+    private function walkAlbum(array $items, string $postId): array
     {
-        if (!$post['media'] || count($post['media']) >= $post['media_count']) {
-            return;
-        }
+        $seen = array_flip(array_column($items, 'id'));
+        $currentId = end($items)['id'];
 
-        $seen = array_column($post['media'], 'id');
-        $next = $this->client->photoPage(end($seen), $post['post_id']);
-        while (count($post['media']) < $post['media_count'] && $next['next_id'] && !in_array($next['next_id'], $seen, true)) {
-            $id = $next['next_id'];
-            $isVideo = $next['next_type'] === 'Video';
-            $seen[] = $id;
+        while ($currentId) {
+            try {
+                $info = $this->client->photoPage($currentId, $postId);
+            } catch (RuntimeException) {
+                break;
+            }
 
-            $next = $this->client->photoPage($id, $post['post_id']);
-            $post['media'][] = [
-                'id' => $id,
-                'type' => $isVideo ? 'video' : 'photo',
-                'url' => $isVideo ? "https://www.facebook.com/watch/?v={$id}" : "https://www.facebook.com/photo/?fbid={$id}&set=pcb.{$post['post_id']}",
-                'source_url' => $isVideo ? null : $next['uri'],
-                'width' => $isVideo ? null : $next['width'],
-                'height' => $isVideo ? null : $next['height'],
+            $nextId = $info['next_id'];
+            if (!$nextId || isset($seen[$nextId])) {
+                break;
+            }
+
+            $seen[$nextId] = true;
+            $items[] = [
+                'id' => $nextId,
+                'type' => $info['next_type'] === 'Video' ? 'video' : 'photo',
+                'url' => "https://www.facebook.com/photo/?fbid={$nextId}",
+                'source_url' => $info['uri'],
+                'width' => $info['width'],
+                'height' => $info['height'],
                 'alt' => null,
                 'thumbnail_url' => null,
                 'file' => null,
             ];
+            $currentId = $nextId;
         }
+
+        return $items;
     }
 
     private function writeIndex(): void
     {
-        $posts = array_values($this->posts);
-        usort($posts, fn ($a, $b) => $b['creation_time'] <=> $a['creation_time']);
-        foreach ($posts as &$post) {
-            foreach ($post['media'] as &$media) {
-                if ($media['file']) {
-                    $media['file'] = "posts/{$post['post_id']}/{$media['file']}";
-                }
-            }
-        }
-        file_put_contents("{$this->dataDir}/posts.json", self::json($posts));
+        $list = array_values($this->posts);
+        usort($list, fn ($a, $b) => ($b['creation_time'] ?? 0) <=> ($a['creation_time'] ?? 0));
+        file_put_contents("{$this->dataDir}/posts.json", self::json($list));
     }
 
-    private static function json(array $data): string
+    private function log(string $msg): void
+    {
+        echo '[' . date('H:i:s') . '] ' . $msg . "\n";
+    }
+
+    private static function excerpt(?string $text, int $limit = 60): string
+    {
+        $oneLine = preg_replace('/\s+/', ' ', trim((string) $text));
+
+        return mb_strlen($oneLine) > $limit ? mb_substr($oneLine, 0, $limit) . '…' : $oneLine;
+    }
+
+    private static function json(mixed $data): string
     {
         return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
-    }
-
-    private static function excerpt(string $text): string
-    {
-        $text = preg_replace('/\s+/u', ' ', $text);
-
-        return mb_strlen($text) > 60 ? mb_substr($text, 0, 60) . '…' : $text;
-    }
-
-    private function log(string $message): void
-    {
-        echo $message, "\n";
     }
 }
