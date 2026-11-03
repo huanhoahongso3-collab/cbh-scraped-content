@@ -22,6 +22,7 @@ class Scraper
         private string $dataDir,
         private bool $withMedia = true,
         private ?int $sinceTimestamp = null,
+        private ?string $existingDir = null,
     ) {
         $this->postsDir = "{$dataDir}/posts";
         $this->stateFile = "{$dataDir}/state.json";
@@ -148,6 +149,26 @@ class Scraper
             if (is_file($path) && filesize($path) > 0) {
                 $item['file'] = "media/{$file}";
                 continue;
+            }
+
+            // Bỏ qua nếu ảnh hoặc video đã được tải về trong thư mục lưu trữ (không tải lại)
+            if ($this->existingDir) {
+                $foundExisting = false;
+                $destBase = "{$post['post_id']}_{$num}_{$item['id']}";
+                $possibleExts = $item['type'] === 'video' ? ['mp4', 'mov', 'webm'] : ['jpg', 'jpeg', 'png', 'webp'];
+                foreach ($possibleExts as $testExt) {
+                    $testPath = "{$this->existingDir}/{$destBase}.{$testExt}";
+                    if (is_file($testPath) && filesize($testPath) > 0) {
+                        $this->log("  -> Bỏ qua {$item['type']} {$destBase}.{$testExt} (đã tồn tại trong kho lưu trữ)");
+                        $item['file'] = "media/{$num}_{$item['id']}.{$testExt}";
+                        $item['already_downloaded'] = true;
+                        $foundExisting = true;
+                        break;
+                    }
+                }
+                if ($foundExisting) {
+                    continue;
+                }
             }
 
             $url = $item['type'] === 'video'

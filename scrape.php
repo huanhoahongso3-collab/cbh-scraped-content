@@ -6,7 +6,7 @@ use CbhScraper\Scraper;
 
 require __DIR__ . '/vendor/autoload.php';
 
-$options = getopt('', ['target:', 'since:', 'max-posts:', 'delay:', 'out:', 'update', 'no-media', 'help']);
+$options = getopt('', ['target:', 'since:', 'max-posts:', 'delay:', 'out:', 'existing-dir:', 'update', 'no-media', 'help']);
 if (isset($options['help'])) {
     echo <<<TXT
     Cách dùng: php scrape.php [tuỳ chọn]
@@ -16,6 +16,7 @@ if (isset($options['help'])) {
       --max-posts=N   Chỉ xử lý N bài trong lần chạy này
       --delay=GIÂY    Khoảng nghỉ giữa các request tới Facebook (mặc định 2.0)
       --out=THƯ_MỤC   Thư mục xuất dữ liệu (mặc định ./data)
+      --existing-dir=THƯ_MỤC Thư mục lưu trữ media đã tải trước đó (tránh tải lại)
       --update        Quét lại từ bài mới nhất để lấy bài mới đăng
       --no-media      Chỉ lấy JSON, không tải ảnh/video
 
@@ -36,13 +37,15 @@ if (!empty($options['target'])) {
 date_default_timezone_set($config['timezone']);
 
 $sinceTimestamp = !empty($options['since']) ? strtotime($options['since']) : null;
+$existingDir = !empty($options['existing-dir']) ? rtrim($options['existing-dir'], '/') : null;
 
 $scraper = new Scraper(
     new FacebookClient($config, (float) ($options['delay'] ?? 2.0)),
     new PostParser($config['timezone']),
     rtrim($options['out'] ?? __DIR__ . '/data', '/'),
     !isset($options['no-media']),
-    $sinceTimestamp
+    $sinceTimestamp,
+    $existingDir
 );
 
 try {
